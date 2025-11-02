@@ -5,48 +5,28 @@ import (
 	"sync"
 )
 
-//simple ping-pong game between two go-routines
+const N = 10
 
-func Ping(pingCh, pongCh chan string, n int, wg *sync.WaitGroup) {
+func Ping(ping, pong chan string, wg *sync.WaitGroup) {
 	defer wg.Done()
-	for i := 0; i < n; i++ {
-		// Ping RECEIVES "pong"
-		message := <-pongCh
-		fmt.Println(message)
-
-		// On the last iteration, don’t send "ping" again (avoid deadlock)
-		if i < n-1 {
-			pingCh <- "ping"
-		}
+	for i := 0; i < N; i++ {
+		ping <- "ping"
+		fmt.Println(<-pong)
 	}
 }
-
-func Pong(pingCh, pongCh chan string, n int, wg *sync.WaitGroup) {
+func Pong(ping, pong chan string, wg *sync.WaitGroup) {
 	defer wg.Done()
-	for i := 0; i < n; i++ {
-		// Pong RECEIVES "ping"
-		message := <-pingCh
-		fmt.Println(message)
-
-		// Always reply with "pong"
-		pongCh <- "pong"
+	for i := 0; i < N; i++ {
+		fmt.Println(<-ping)
+		pong <- "pong"
 	}
 }
-
 func main() {
-	const N = 10
-	//we can also do this using buffered channels
-	pingCh := make(chan string)
-	pongCh := make(chan string)
-
 	var wg sync.WaitGroup
+	ping := make(chan string)
+	pong := make(chan string)
 	wg.Add(2)
-
-	go Ping(pingCh, pongCh, N, &wg)
-	go Pong(pingCh, pongCh, N, &wg)
-
-	// Start with "ping"
-	pingCh <- "ping"
-
+	go Ping(ping, pong, &wg)
+	go Pong(ping, pong, &wg)
 	wg.Wait()
 }
