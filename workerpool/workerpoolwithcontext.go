@@ -3,41 +3,66 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
-
-	"golang.org/x/time/rate"
 )
 
-func worker(workerId int, jobsChan chan int, wg *sync.WaitGroup, rateLimiter *rate.Limiter, ctx context.Context) {
+func worker(id int, jobs chan int, wg *sync.WaitGroup, ctx context.Context) {
 	defer wg.Done()
-	for job := range jobsChan {
-		_ = rateLimiter.Wait(context.Background())
+	for {
 		select {
+		// Option A: Check context for cancellation (urgent stop)
 		case <-ctx.Done():
-			fmt.Printf("Worker %d: Job %d cancelled\n", workerId, job)
+			// If the work item was long-running, we'd check ctx here.
+			fmt.Printf("worker %d closed by context cancellation\n", id)
 			return
-		default:
-			fmt.Printf("Worker %d: Processing job %d\n", workerId, job)
-			time.Sleep(500 * time.Millisecond)
+
+		// Option B: Check job channel for work (standard pool exit)
+		case j, ok := <-jobs:
+			if !ok {
+				// The job channel was closed, meaning no more jobs are coming.
+				fmt.Printf("worker %d: job channel closed, exiting gracefully\n", id)
+				return
+			}
+			// Process the job
+			time.Sleep(100 * time.Millisecond) // Use a smaller duration for faster test
+			fmt.Printf("worker %d processed %d\n", id, j)
 		}
 	}
 }
 func main() {
-	numJobs := 20
+	//graceful shutdown
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
+	ctx, cancel := context.WithCancel(context.Background())
+	jobs := make(chan int)
+	go func() {
+		<-stop
+		fmt.Println("stopped..")
+		cancel()
+	}()
 	var wg sync.WaitGroup
-	jobsChan := make(chan int, numJobs)
-	r := 5
-	rateLimiter := rate.NewLimiter(rate.Limit(r), 5)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	for i := 0; i < 5; i++ {
+	workerCount := 5
+	jobCount := 100
+	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
-		go worker(i, jobsChan, &wg, rateLimiter, ctx)
+		go worker(i, jobs, &wg, ctx)
 	}
-	for i := 1; i <= numJobs; i++ {
-		jobsChan <- i
+	for i := 0; i < jobCount; i++ {
+		select {
+		case <-ctx.Done():
+			// Shutdown requested, stop submitting jobs
+			fmt.Printf("Shutdown requested. Submitted %d jobs.\n", i)
+			goto submissionComplete // Use goto for clean exit from loop
+		case jobs <- i:
+			// Job submitted successfully
+		}
 	}
-	close(jobsChan)
+submissionComplete:
+	close(jobs)
+
 	wg.Wait()
 }
